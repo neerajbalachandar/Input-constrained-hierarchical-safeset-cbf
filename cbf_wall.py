@@ -8,7 +8,7 @@ class MobileRobotCBF:
         self.v_min, self.v_max = -0.5, 1.5   # m/s
         self.w_min, self.w_max = -1.0, 1.0   # rad/s
         self.u_bounds = [(self.v_min, self.v_max), (self.w_min, self.w_max)] 
-        self.alpha_gain = 1.0 # How aggressively to brake
+        self.alpha_gain = 5.0 # How aggressively to brake
 
     def get_dynamics(self, theta):
         # f(x) is 0 for kinematic unicycle
@@ -41,13 +41,44 @@ class MobileRobotCBF:
         
         res = minimize(objective, x0=u_nominal, bounds=self.u_bounds, constraints=cons)
         return res.x if res.success else np.array([0.0, 0.0])
+    
+    
+    
+def nominal_controller(state):
+    px, py, theta = state
+    
+    wall_x = 5.0
+    dist_to_wall = wall_x - px
+
+    # Desired behavior:
+    # Far from wall → go straight
+    # Near wall → turn upward (theta → pi/2)
+
+    if dist_to_wall > 1.0:
+        # Go straight
+        v = 1.0
+        omega = 0.0
+    else:
+        # Turn to align with wall (theta → 90 degrees)
+        desired_theta = np.pi / 2
+        theta_error = desired_theta - theta
+        
+        # Normalize angle
+        theta_error = np.arctan2(np.sin(theta_error), np.cos(theta_error))
+
+        v = 1.0
+        omega = 2.0 * theta_error
+
+    return np.array([v, omega])
 
 # --- Simulation Setup ---
 bot = MobileRobotCBF()
 dt = 0.1
 steps = 100
 state = np.array([0.0, 0.0, 0.0]) # Start at origin, facing right
-desired_u = np.array([3.475, 0.0])  # User wants to go 2.0 m/s (above limit!)
+# desired_u = np.array([2.0, 0.0])  # User wants to go 2.0 m/s (above limit!)
+
+desired_u = nominal_controller(state)
 
 trajectory = [state.copy()]
 controls = []
