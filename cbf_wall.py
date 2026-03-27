@@ -86,6 +86,7 @@ controls = []
 # --- Simulation Loop ---
 for _ in range(steps):
     # 1. Filter the command
+    desired_u = nominal_controller(state)
     safe_u = bot.safety_filter(state, desired_u)
     controls.append(safe_u)
     
