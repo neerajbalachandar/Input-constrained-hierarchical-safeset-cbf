@@ -14,7 +14,7 @@ class PointRobot2D:
 
 OBSTACLE_X, OBSTACLE_Y, OBSTACLE_R = 5.0, 0.0, 1.0
 ALPHA = 2.0
-GOAL = np.array([10.0, 2.0])
+GOAL = np.array([10.0, 0.0])
 
 
 def barrier_function(x):
@@ -25,8 +25,21 @@ def barrier_function(x):
 
 
 def nominal_controller(x):
-    k = 1.2
-    return k * (GOAL - x)
+    # Goal-seeking term (intentionally aggressive).
+    u_goal = 1.8 * (GOAL - x)
+
+    # Small circulation term near obstacle to break symmetry and encourage
+    # passing around the obstacle instead of stalling on the boundary.
+    rel = x - np.array([OBSTACLE_X, OBSTACLE_Y])
+    dist = np.linalg.norm(rel)
+    if dist < 1e-8:
+        tangent = np.array([0.0, -1.0])
+    else:
+        tangent = np.array([-rel[1], rel[0]]) / dist
+
+    influence = np.exp(-((dist - (OBSTACLE_R + 0.8)) ** 2) / (2.0 * 0.9**2))
+    u_circ = 0.9 * influence * tangent
+    return u_goal + u_circ
 
 
 def safety_filter(robot, x, u_nominal):
@@ -63,7 +76,7 @@ def safety_filter(robot, x, u_nominal):
 
 
 def simulate(robot, use_cbf=True, dt=0.05, steps=320):
-    x = np.array([0.0, -2.0])
+    x = np.array([0.0, 0.0])
 
     traj = [x.copy()]
     h_hist = []
@@ -72,6 +85,7 @@ def simulate(robot, use_cbf=True, dt=0.05, steps=320):
 
     min_h = np.inf
     unsafe_steps = 0
+    cbf_active_steps = 0
 
     for _ in range(steps):
         u_nom = nominal_controller(x)
@@ -82,6 +96,8 @@ def simulate(robot, use_cbf=True, dt=0.05, steps=320):
             ]
         )
         u_app = safety_filter(robot, x, u_nom) if use_cbf else u_nom
+        if use_cbf and np.linalg.norm(u_app - u_nom) > 1e-8:
+            cbf_active_steps += 1
 
         h, _ = barrier_function(x)
         min_h = min(min_h, h)
@@ -103,6 +119,8 @@ def simulate(robot, use_cbf=True, dt=0.05, steps=320):
         "time": np.arange(0.0, steps * dt, dt),
         "min_h": min_h,
         "unsafe": unsafe_steps,
+        "cbf_active_steps": cbf_active_steps,
+        "goal_error": float(np.linalg.norm(x - GOAL)),
     }
 
 
@@ -116,6 +134,8 @@ def plot_trajectories(no_cbf, with_cbf):
     plt.plot(no_cbf["traj"][:, 0], no_cbf["traj"][:, 1], "k--", lw=2.0, label="No CBF")
     plt.plot(with_cbf["traj"][:, 0], with_cbf["traj"][:, 1], "b", lw=2.5, label="With CBF")
     plt.scatter(no_cbf["traj"][0, 0], no_cbf["traj"][0, 1], c="g", s=55, label="Start")
+    plt.scatter(no_cbf["traj"][-1, 0], no_cbf["traj"][-1, 1], c="k", s=45, label="End (No CBF)")
+    plt.scatter(with_cbf["traj"][-1, 0], with_cbf["traj"][-1, 1], c="b", s=45, label="End (With CBF)")
     plt.scatter(GOAL[0], GOAL[1], c="m", s=55, label="Goal")
     plt.axis("equal")
     plt.xlabel("x")
@@ -128,10 +148,15 @@ def plot_trajectories(no_cbf, with_cbf):
 
 
 def plot_barrier(no_cbf, with_cbf):
+    low = min(np.min(no_cbf["h"]), np.min(with_cbf["h"]), -0.1)
+    high = max(np.max(no_cbf["h"]), np.max(with_cbf["h"]), 0.1)
+
     plt.figure(figsize=(8, 4))
+    plt.axhspan(low - 0.2, 0.0, color="tomato", alpha=0.15, label="Unsafe region h<0")
     plt.plot(no_cbf["time"], no_cbf["h"], "k--", lw=2.0, label="No CBF")
     plt.plot(with_cbf["time"], with_cbf["h"], "b", lw=2.0, label="With CBF")
     plt.axhline(0.0, color="r", linestyle=":", lw=1.8, label="Safety boundary h=0")
+    plt.ylim(low - 0.2, high + 0.2)
     plt.xlabel("Time [s]")
     plt.ylabel("h(x)")
     plt.title("Barrier Function Over Time")
@@ -142,7 +167,7 @@ def plot_barrier(no_cbf, with_cbf):
 
 
 def main():
-    robot = PointRobot2D(ux_min=-1.0, ux_max=1.0, uy_min=-1.0, uy_max=1.0)
+    robot = PointRobot2D(ux_min=-2.0, ux_max=2.0, uy_min=-2.0, uy_max=2.0)
 
     res_no_cbf = simulate(robot, use_cbf=False)
     res_with_cbf = simulate(robot, use_cbf=True)
@@ -153,6 +178,9 @@ def main():
     print("\n===== SUMMARY =====")
     print(f"No CBF:   min h = {res_no_cbf['min_h']:.4f}, unsafe steps = {res_no_cbf['unsafe']}")
     print(f"With CBF: min h = {res_with_cbf['min_h']:.4f}, unsafe steps = {res_with_cbf['unsafe']}")
+    print(f"CBF active steps = {res_with_cbf['cbf_active_steps']}")
+    print(f"Goal error (No CBF)   = {res_no_cbf['goal_error']:.4f}")
+    print(f"Goal error (With CBF) = {res_with_cbf['goal_error']:.4f}")
 
 
 if __name__ == "__main__":
