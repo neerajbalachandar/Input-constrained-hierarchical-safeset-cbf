@@ -76,11 +76,17 @@ title('Initial CBF Boundaries Across Cases','Interpreter','latex');
 axis equal;
 xlim([-1.2 1.2]); ylim([-1.2 1.2]);
 
-legend_entries = {'State constraints','State constraints','Initial guess h0 (x)=0'};
+legend_entries = {'State constraints','Initial guess $h_0(x)=0$'};
 for k = 1:length(results)
     legend_entries{end+1} = results{k}.case_name; %#ok<SAGROW>
 end
-legend(legend_entries,'Interpreter','none','Location','bestoutside');
+
+lgd = legend(legend_entries, ...
+    'Interpreter','latex', ...
+    'Location','southeast');
+
+lgd.Box = 'on';
+lgd.FontSize = 10;
 
 if save_figs
     saveas(gcf,'plot_all_geometries.png');
