@@ -2,207 +2,158 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
-# ================= ROBOT MODEL =================
-class MobileRobot:
-    def __init__(self, v_min=-0.5, v_max=0.5, w_min=-1.0, w_max=1.0):
-        self.v_min = v_min
-        self.v_max = v_max
-        self.w_min = w_min
-        self.w_max = w_max
-        self.u_bounds = [(self.v_min, self.v_max), (self.w_min, self.w_max)]
 
-    def get_dynamics(self, theta):
-        f = np.zeros(3)
-        g = np.array([
-            [np.cos(theta), 0.0],
-            [np.sin(theta), 0.0],
-            [0.0,           1.0]
-        ])
-        return f, g
+class PointRobot2D:
+    def __init__(self, ux_min=-1.0, ux_max=1.0, uy_min=-1.0, uy_max=1.0):
+        self.ux_min = ux_min
+        self.ux_max = ux_max
+        self.uy_min = uy_min
+        self.uy_max = uy_max
+        self.u_bounds = [(ux_min, ux_max), (uy_min, uy_max)]
 
 
-# ================= OBSTACLE + BARRIER =================
-x0, y0, r0 = 5.0, 0.0, 1.0
-alpha_gain = 5.0
+OBSTACLE_X, OBSTACLE_Y, OBSTACLE_R = 5.0, 0.0, 1.0
+ALPHA = 2.0
+GOAL = np.array([10.0, 2.0])
+
 
 def barrier_function(x):
-    px, py, theta = x
-    h = (px - x0)**2 + (py - y0)**2 - r0**2
-    grad_h = np.array([2*(px-x0), 2*(py-y0), 0.0])
+    px, py = x
+    h = (px - OBSTACLE_X) ** 2 + (py - OBSTACLE_Y) ** 2 - OBSTACLE_R**2
+    grad_h = np.array([2.0 * (px - OBSTACLE_X), 2.0 * (py - OBSTACLE_Y)])
     return h, grad_h
 
 
-# ================= SAFETY FILTER =================
+def nominal_controller(x):
+    k = 1.2
+    return k * (GOAL - x)
+
+
 def safety_filter(robot, x, u_nominal):
     h, grad_h = barrier_function(x)
-    theta = x[2]
-    f, g = robot.get_dynamics(theta)
 
-    Lf_h = grad_h @ f
-    Lg_h = grad_h @ g
-    rhs = -alpha_gain * h - Lf_h
+    # CBF condition for x_dot = u:
+    # grad_h(x)^T u + alpha * h(x) >= 0
+    rhs = -ALPHA * h
+
+    u_nominal = np.array(
+        [
+            np.clip(u_nominal[0], robot.ux_min, robot.ux_max),
+            np.clip(u_nominal[1], robot.uy_min, robot.uy_max),
+        ]
+    )
+
+    # Fast path: if nominal already satisfies the CBF, keep it.
+    if grad_h @ u_nominal >= rhs:
+        return u_nominal
 
     def objective(u):
-        return np.sum((u - u_nominal)**2)
+        return np.sum((u - u_nominal) ** 2)
 
-    cons = ({'type': 'ineq', 'fun': lambda u: Lg_h @ u - rhs})
+    constraints = ({"type": "ineq", "fun": lambda u: grad_h @ u - rhs},)
 
-    res = minimize(objective, x0=u_nominal,
-                   bounds=robot.u_bounds,
-                   constraints=cons)
+    result = minimize(
+        objective,
+        x0=u_nominal,
+        bounds=robot.u_bounds,
+        constraints=constraints,
+    )
 
-    return res.x if res.success else np.array([0.0, 0.0])
-
-
-# ================= NOMINAL CONTROLLER =================
-def nominal_controller(state):
-    # intentionally unsafe (no obstacle awareness)
-    return np.array([0.5, 0.0])
+    return result.x if result.success else np.array([0.0, 0.0])
 
 
-# ================= SIMULATION =================
-def simulate(robot, use_cbf=True, dt=0.1, steps=120):
-    state = np.array([0.0, 0.0, 0.0])
+def simulate(robot, use_cbf=True, dt=0.05, steps=320):
+    x = np.array([0.0, -2.0])
 
-    traj, h_vals = [state.copy()], []
-    u_nom_hist, u_app_hist = [], []
+    traj = [x.copy()]
+    h_hist = []
+    u_nom_hist = []
+    u_app_hist = []
 
     min_h = np.inf
     unsafe_steps = 0
 
     for _ in range(steps):
-        u_nom = nominal_controller(state)
+        u_nom = nominal_controller(x)
+        u_nom = np.array(
+            [
+                np.clip(u_nom[0], robot.ux_min, robot.ux_max),
+                np.clip(u_nom[1], robot.uy_min, robot.uy_max),
+            ]
+        )
+        u_app = safety_filter(robot, x, u_nom) if use_cbf else u_nom
 
-        if use_cbf:
-            u_app = safety_filter(robot, state, u_nom)
-        else:
-            u_app = np.array([
-                np.clip(u_nom[0], robot.v_min, robot.v_max),
-                np.clip(u_nom[1], robot.w_min, robot.w_max)
-            ])
-
-        h, _ = barrier_function(state)
-
-        if h < 0:
+        h, _ = barrier_function(x)
+        min_h = min(min_h, h)
+        if h < 0.0:
             unsafe_steps += 1
 
-        min_h = min(min_h, h)
+        x = x + u_app * dt
 
-        f, g = robot.get_dynamics(state[2])
-        state = state + (f + g @ u_app) * dt
-
-        traj.append(state.copy())
-        h_vals.append(h)
+        traj.append(x.copy())
+        h_hist.append(h)
         u_nom_hist.append(u_nom)
         u_app_hist.append(u_app)
 
     return {
         "traj": np.array(traj),
-        "h": np.array(h_vals),
+        "h": np.array(h_hist),
         "u_nom": np.array(u_nom_hist),
         "u_app": np.array(u_app_hist),
-        "time": np.arange(0, steps*dt, dt),
+        "time": np.arange(0.0, steps * dt, dt),
         "min_h": min_h,
-        "unsafe": unsafe_steps
+        "unsafe": unsafe_steps,
     }
 
 
-# ================= VISUALIZATION =================
-def plot_trajectory(results, title):
-    traj = results["traj"]
+def plot_trajectories(no_cbf, with_cbf):
+    theta = np.linspace(0, 2 * np.pi, 300)
+    obs_x = OBSTACLE_X + OBSTACLE_R * np.cos(theta)
+    obs_y = OBSTACLE_Y + OBSTACLE_R * np.sin(theta)
 
-    x_vals = np.linspace(-1, 8, 400)
-    y_vals = np.linspace(-3, 3, 400)
-    X, Y = np.meshgrid(x_vals, y_vals)
-    H = (X-x0)**2 + (Y-y0)**2 - r0**2
-
-    plt.figure(figsize=(7,6))
-
-    plt.contourf(X, Y, H, levels=60, cmap='coolwarm')
-    plt.contour(X, Y, H, levels=[0], colors='black', linewidths=2)
-
-    plt.plot(traj[:,0], traj[:,1], 'b', linewidth=2)
-    plt.scatter(traj[0,0], traj[0,1], c='g', label='Start')
-    plt.scatter(traj[-1,0], traj[-1,1], c='m', label='End')
-
-    theta = np.linspace(0, 2*np.pi, 200)
-    plt.fill(x0 + r0*np.cos(theta), y0 + r0*np.sin(theta),
-             color='red', alpha=0.3)
-
-    plt.title(title)
-    plt.axis('equal')
-    plt.grid()
+    plt.figure(figsize=(8, 6))
+    plt.fill(obs_x, obs_y, color="tomato", alpha=0.35, label="Obstacle")
+    plt.plot(no_cbf["traj"][:, 0], no_cbf["traj"][:, 1], "k--", lw=2.0, label="No CBF")
+    plt.plot(with_cbf["traj"][:, 0], with_cbf["traj"][:, 1], "b", lw=2.5, label="With CBF")
+    plt.scatter(no_cbf["traj"][0, 0], no_cbf["traj"][0, 1], c="g", s=55, label="Start")
+    plt.scatter(GOAL[0], GOAL[1], c="m", s=55, label="Goal")
+    plt.axis("equal")
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.title("2D Trajectory: Obstacle Avoidance with CBF")
+    plt.grid(True, alpha=0.25)
     plt.legend()
+    plt.tight_layout()
     plt.show()
 
 
-def plot_barrier(results, title):
-    plt.figure(figsize=(6,4))
-    plt.plot(results["time"], results["h"])
-    plt.axhline(0, linestyle='--')
-    plt.title(title)
-    plt.xlabel("Time")
+def plot_barrier(no_cbf, with_cbf):
+    plt.figure(figsize=(8, 4))
+    plt.plot(no_cbf["time"], no_cbf["h"], "k--", lw=2.0, label="No CBF")
+    plt.plot(with_cbf["time"], with_cbf["h"], "b", lw=2.0, label="With CBF")
+    plt.axhline(0.0, color="r", linestyle=":", lw=1.8, label="Safety boundary h=0")
+    plt.xlabel("Time [s]")
     plt.ylabel("h(x)")
-    plt.grid()
+    plt.title("Barrier Function Over Time")
+    plt.grid(True, alpha=0.25)
+    plt.legend()
+    plt.tight_layout()
     plt.show()
 
 
-def plot_controls(results, robot, title):
-    t = results["time"]
-    u_nom = results["u_nom"]
-    u_app = results["u_app"]
+def main():
+    robot = PointRobot2D(ux_min=-1.0, ux_max=1.0, uy_min=-1.0, uy_max=1.0)
 
-    plt.figure(figsize=(10,4))
+    res_no_cbf = simulate(robot, use_cbf=False)
+    res_with_cbf = simulate(robot, use_cbf=True)
 
-    plt.subplot(1,2,1)
-    plt.plot(t, u_nom[:,0], '--k')
-    plt.plot(t, u_app[:,0], 'g')
-    plt.axhline(robot.v_max, linestyle=':')
-    plt.axhline(robot.v_min, linestyle=':')
-    plt.title("v")
+    plot_trajectories(res_no_cbf, res_with_cbf)
+    plot_barrier(res_no_cbf, res_with_cbf)
 
-    plt.subplot(1,2,2)
-    plt.plot(t, u_nom[:,1], '--k')
-    plt.plot(t, u_app[:,1], 'b')
-    plt.axhline(robot.w_max, linestyle=':')
-    plt.axhline(robot.w_min, linestyle=':')
-    plt.title("omega")
-
-    plt.suptitle(title)
-    plt.show()
+    print("\n===== SUMMARY =====")
+    print(f"No CBF:   min h = {res_no_cbf['min_h']:.4f}, unsafe steps = {res_no_cbf['unsafe']}")
+    print(f"With CBF: min h = {res_with_cbf['min_h']:.4f}, unsafe steps = {res_with_cbf['unsafe']}")
 
 
-# ================= RUN DEMOS =================
-
-# ---- Demo 1: No CBF ----
-robot1 = MobileRobot()
-res1 = simulate(robot1, use_cbf=False)
-
-# ---- Demo 2: Fixed CBF ----
-robot2 = MobileRobot()
-res2 = simulate(robot2, use_cbf=True)
-
-# ---- Demo 3: Restricted inputs ----
-robot3 = MobileRobot(v_min=0.0, v_max=0.3, w_min=-0.3, w_max=0.3)
-res3 = simulate(robot3, use_cbf=True)
-
-
-# ================= PLOTS =================
-plot_trajectory(res1, "Demo 1: No CBF (Crash)")
-plot_trajectory(res2, "Demo 2: Fixed CBF (Safe)")
-plot_trajectory(res3, "Demo 3: Restricted Inputs")
-
-plot_barrier(res1, "Barrier (No CBF)")
-plot_barrier(res2, "Barrier (CBF)")
-plot_barrier(res3, "Barrier (Restricted)")
-
-plot_controls(res1, robot1, "Controls (No CBF)")
-plot_controls(res2, robot2, "Controls (CBF)")
-plot_controls(res3, robot3, "Controls (Restricted)")
-
-
-# ================= SUMMARY =================
-print("\n===== SUMMARY =====")
-print("No CBF:          min h =", res1["min_h"], " unsafe steps =", res1["unsafe"])
-print("Fixed CBF:       min h =", res2["min_h"], " unsafe steps =", res2["unsafe"])
-print("Restricted CBF:  min h =", res3["min_h"], " unsafe steps =", res3["unsafe"])
+if __name__ == "__main__":
+    main()
