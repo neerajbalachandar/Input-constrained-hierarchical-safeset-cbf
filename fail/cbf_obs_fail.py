@@ -66,10 +66,9 @@ def evaluate_cbf(state, obs, l_shift):
         ov * np.sin(oyaw) - rv * np.sin(ryaw) - l_shift * np.cos(ryaw) * rw
     ])
 
-    # MINIMAL CHANGE 1: A naive heuristic h function
+    # naive heuristic h 
     safe_dist = orad + 0.4
     
-    # h = ||p||^2 - R^2 + lambda * (p . v)
     h_val = (np.linalg.norm(p_rel)**2 - safe_dist**2) + 0.8 * np.dot(p_rel, v_rel)
     
     return h_val
@@ -96,7 +95,7 @@ def solve_cbf_qp(nom_a, nom_alpha, state, obs, gamma, dt, l_shift):
         sov * ca.sin(soyaw) - sv * ca.sin(syaw) - l_shift * ca.cos(syaw) * sw
     )
 
-    # MINIMAL CHANGE 1: Naive heuristic mirrored in CasADi
+
     safe_dist = sor + 0.4
     h_function = (ca.norm_2(dp)**2 - safe_dist**2) + 0.8 * ca.dot(dp, dv)
 
@@ -120,14 +119,13 @@ def solve_cbf_qp(nom_a, nom_alpha, state, obs, gamma, dt, l_shift):
     current_vals = [state['x'], state['y'], state['yaw'], state['v'], state['w'],              
                     obs['x'], obs['y'], obs['v'], obs['yaw'], obs['r']]
 
-    # MINIMAL CHANGE 2: Add realistic physical control bounds.
-    # Without this, the solver assumes the robot has infinite braking power.
+
     phys_lbx = [-3.0, -2.0] # Max braking (-3 m/s^2), max steer right
     phys_ubx = [ 3.0,  2.0] # Max accel (+3 m/s^2), max steer left
 
     try:                                                                    
         solution = solver(x0=[nom_a, nom_alpha], 
-                          lbx=phys_lbx, ubx=phys_ubx, # <- CONSTRAINTS APPLIED
+                          lbx=phys_lbx, ubx=phys_ubx, 
                           lbg=0, ubg=ca.inf, p=current_vals)
         filtered_a = float(solution['x'][0])
         filtered_alpha = float(solution['x'][1])
