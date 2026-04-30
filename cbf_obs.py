@@ -1,3 +1,7 @@
+""" CODE BY : Shriram Hari
+This code simulates the obstacle avoidance for a 2nd order unicycle model using a heuristic Control Barrier Function.
+"""
+
 import numpy as np
 import casadi as ca
 import matplotlib.pyplot as plt

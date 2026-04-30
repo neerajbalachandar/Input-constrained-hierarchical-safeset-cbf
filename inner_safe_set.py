@@ -1,3 +1,7 @@
+""" CODE BY : Shriram Hari
+This code visualizes the safe set with and without the inclusion of input constraints in the CBF framework.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 
