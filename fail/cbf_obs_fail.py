@@ -1,3 +1,9 @@
+""" CODE BY : Shriram Hari
+This code investigates the failure of obstacle avoidance for a 2nd order unicycle model using a heuristic Control Barrier Function.
+This proves the need for non-hueristic based h(x) -> we look for parametrization and closed form solutions.
+"""
+
+
 import numpy as np
 import casadi as ca
 import matplotlib.pyplot as plt
